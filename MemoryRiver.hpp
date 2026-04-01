@@ -9,13 +9,12 @@ using std::fstream;
 using std::ifstream;
 using std::ofstream;
 
-// A simple file-backed storage with space reclamation via a free list.
+// File-backed storage with space reclamation via a free list.
 // Layout (bytes):
-// [info_len ints reserved for user][1 int free_list_head][- blocks of T ...]
-// - free_list_head stores the byte offset (index) of the first free block, or -1 if none.
-// - Each freed block stores the next free index as an int at its start.
-// - All indices returned by write() are byte offsets to the beginning of the stored T.
-// - All operations open/close the file to keep usage simple and robust.
+// [info_len ints for user][1 int free_list_head][- blocks of T ...]
+// - free_list_head stores the byte offset of the first free block, or -1.
+// - A freed block stores the next free offset as an int at its start.
+// - Indices returned by write() are byte offsets to the beginning of T.
 
 template<class T, int info_len = 2>
 class MemoryRiver {
@@ -30,11 +29,9 @@ private:
     std::streamoff free_head_pos() const { return user_header_bytes(); }
     std::streamoff full_header_bytes() const { return user_header_bytes() + static_cast<std::streamoff>(extra_header_ints) * sizeof(int); }
 
-    // Open file with in/out binary; create if not exists
     void open_io() {
         file.open(file_name, std::ios::in | std::ios::out | std::ios::binary);
         if (!file.is_open()) {
-            // create new file with user header initialised if missing
             file.clear();
             ofstream creator(file_name, std::ios::binary | std::ios::trunc);
             int zero = 0;
@@ -52,7 +49,6 @@ private:
         file.seekg(0, std::ios::end);
         std::streamoff sz = file.tellg();
         if (sz < full_header_bytes()) {
-            // append free head = -1
             int neg1 = -1;
             file.clear();
             file.seekp(user_header_bytes(), std::ios::beg);
@@ -85,8 +81,7 @@ public:
         int tmp = 0;
         for (int i = 0; i < info_len; ++i)
             out.write(reinterpret_cast<char *>(&tmp), sizeof(int));
-        // also initialize our internal free head to -1 right away
-        int neg1 = -1;
+        int neg1 = -1; // free list head
         out.write(reinterpret_cast<char*>(&neg1), sizeof(int));
         out.close();
     }
@@ -110,36 +105,30 @@ public:
         close_io();
     }
 
-    // 在文件合适位置写入类对象t，并返回写入的位置索引index
-    // 位置索引index可以取为对象写入的起始位置
+    // 写入对象，返回起始位置索引
     int write(T &t) {
         open_io();
         int head = read_free_head();
         int index;
         if (head == -1) {
-            // append to file end
             file.seekp(0, std::ios::end);
             index = static_cast<int>(file.tellp());
             file.write(reinterpret_cast<char*>(&t), sizeof(T));
             file.flush();
         } else {
-            // reuse head block
             index = head;
-            // read next free from the block's start
             int next;
             file.seekg(index, std::ios::beg);
             file.read(reinterpret_cast<char*>(&next), sizeof(int));
-            // write object to this position
             file.seekp(index, std::ios::beg);
             file.write(reinterpret_cast<char*>(&t), sizeof(T));
-            // update free list head
             write_free_head(next);
         }
         close_io();
         return index;
     }
 
-    // 用t的值更新位置索引index对应的对象
+    // 覆写指定位置的对象
     void update(T &t, const int index) {
         open_io();
         file.seekp(static_cast<std::streamoff>(index), std::ios::beg);
@@ -148,7 +137,7 @@ public:
         close_io();
     }
 
-    // 读出位置索引index对应的T对象的值并赋值给t
+    // 读取指定位置的对象
     void read(T &t, const int index) {
         open_io();
         file.seekg(static_cast<std::streamoff>(index), std::ios::beg);
@@ -156,14 +145,12 @@ public:
         close_io();
     }
 
-    // 删除位置索引index对应的对象（回收到空闲链表）
+    // 删除（回收到空闲链表）
     void Delete(int index) {
         open_io();
         int head = read_free_head();
-        // write current head into the freed block as next pointer
         file.seekp(static_cast<std::streamoff>(index), std::ios::beg);
         file.write(reinterpret_cast<char*>(&head), sizeof(int));
-        // update free head to this index
         write_free_head(index);
         file.flush();
         close_io();
