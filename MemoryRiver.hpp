@@ -12,7 +12,7 @@ using std::ofstream;
 // File-backed storage with space reclamation via a free list.
 // Layout (bytes):
 // [info_len ints for user][1 int free_list_head][- blocks of T ...]
-// - free_list_head stores the byte offset of the first free block, or -1 if none.
+// - free_list_head stores the byte offset of the first free block, or -1.
 // - A freed block stores the next free offset as an int at its start.
 // - Indices returned by write() are byte offsets to the beginning of T.
 
